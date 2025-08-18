@@ -2,6 +2,7 @@
 
 from functools import partial
 from typing import Any
+import logging
 import numpy as np
 from scipy.sparse.linalg import minres
 import jax
@@ -34,6 +35,8 @@ MAX_CACHED_DOMSIZE = 7
 
 TROTTERIZE_AMAT = True
 
+LOG = logging.getLogger(__name__)
+
 
 def qite(
     hterms: list[SparsePauliOp],
@@ -41,17 +44,36 @@ def qite(
     initial_state: np.ndarray,
     delta_beta: float,
     num_steps: int,
-    solver_params: dict[str, Any]
-) -> tuple[np.ndarray, list[float]]:
+    solver_params: dict[str, Any],
+    return_energies: bool = True
+) -> np.ndarray | tuple[np.ndarray, list[float]]:
     """Loop over Trotter steps and evolve the initial state."""
     state = initial_state
-    norms = []
-    for _ in range(num_steps):
+    energies = []
+    for istep in range(num_steps):
+        LOG.info('QITE step %d', istep)
         for hterm, domain in zip(hterms, domains):
-            state, norm = qite_step(hterm, domain, state, delta_beta, solver_params)
-            norms.append(norm)
+            state = qite_step(hterm, domain, state, delta_beta, solver_params)
 
-    return state, norms
+        if return_energies:
+            if isinstance(hterms, SparsePauliOp):
+                hamiltonian = hterms
+            else:
+                hamiltonian = sum(hterms[1:], hamiltonian[0])
+
+            if np.log2(initial_state.shape[0]) <= 24:
+                energy = (state.conjugate() @ (hamiltonian.to_matrix(sparse=True) @ state)).real
+            else:
+                energy = 0.
+                for hterm in hterms:
+                    energy += (state.conjugate() @ apply_hterm(hterm, state)).real
+
+            energies.append(energy)
+
+    if return_energies:
+        return state, energies
+    else:
+        return state
 
 
 def qite_step(
@@ -60,7 +82,7 @@ def qite_step(
     state: np.ndarray,
     delta_beta: float,
     solver_params: dict[str, Any]
-) -> tuple[np.ndarray, float]:
+) -> np.ndarray:
     """Single Trotter step on one Hamiltonian term."""
     dom_size = len(domain)
     if dom_size <= MAX_CACHED_DOMSIZE and dom_size not in PAULISTR_MATRICES:
@@ -104,7 +126,7 @@ def qite_step(
             )
         state = update_state(a_matrix, state, domain, delta_beta)
 
-    return state, sqrt_c
+    return state
 
 
 @partial(jax.jit, static_argnums=[1])
