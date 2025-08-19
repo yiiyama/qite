@@ -1,4 +1,6 @@
 """1D Z2 lattice gauge theory Hamiltonian."""
+from typing import Optional
+import numpy as np
 from qiskit.quantum_info import SparsePauliOp
 
 
@@ -46,20 +48,37 @@ def hamiltonian(
     return SparsePauliOp(paulis, coeffs)
 
 
-def domain_of(hterm: SparsePauliOp, flank_size: int = 1) -> tuple[int, ...]:
+def domain_of(
+    hterm: SparsePauliOp,
+    domain_sizes: Optional[dict[int | str, int]] = None,
+    flank_size: int = 1
+) -> tuple[int, ...]:
     """Return the qubit domain that covers the support of the Hamiltonian term.
 
     Args:
         hterm: Single-term SparsePauliOp.
+        domain_sizes: Map from Pauli string or Pauli weight to domain size. Overrides flank_size.
         flank_size: Number of extra qubits on each end of the domain.
 
     Returns:
         A tuple of qubit indices that specify the QITE domain of the Hamiltonian term.
     """
-    pstr = hterm.paulis[0].to_label()
+    pstr_full = hterm.paulis[0].to_label()
     # Counting qubits from the right
-    pauli_positions = [iq for iq, p in enumerate(pstr[::-1]) if p != 'I']
-    dom_size = (max(pauli_positions) + flank_size) - (min(pauli_positions) - flank_size) + 1
+    pauli_positions = [iq for iq, p in enumerate(pstr_full[::-1]) if p != 'I']
+    # For now we limit to contiguous Paulis
+    if not np.all(np.abs(np.diff(pauli_positions)) == 1):
+        raise ValueError('Non-contiguous Pauli op passed')
+
+    pstr = ''.join(pstr_full[::-1][pos] for pos in pauli_positions[::-1])
+    try:
+        dom_size = domain_sizes[pstr]
+    except KeyError:
+        try:
+            dom_size = domain_sizes[len(pstr)]
+        except KeyError:
+            dom_size = (max(pauli_positions) + flank_size) - (min(pauli_positions) - flank_size) + 1
+    flank_size = (dom_size - len(pstr)) // 2
     low = max(min(pauli_positions) - flank_size, 0)
     high = min(low + dom_size, hterm.num_qubits)
     low = min(high - dom_size, low)
