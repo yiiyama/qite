@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qite"
+version = "0.5.0"
+authors = [
+  { name="Yutaro Iiyama", email="iiyama@icepp.s.u-tokyo.ac.jp" },
+]
+description = "Quantum imaginary-time evolution"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "jax"
+]
+
+[project.urls]
+Homepage = "https://github.com/yiiyama/qite"
+Issues = "https://github.com/yiiyama/qite/issues"
