@@ -82,7 +82,7 @@ def qite_step(
     if isinstance(hterm[0], str):
         weight = len(pauli_positions(hterm[0]))
     else:
-        weight = hterm[1]
+        weight = len(hterm[1])
     assert_pauli_matrices(weight)
 
     dom_size = len(domain)
