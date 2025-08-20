@@ -1,7 +1,7 @@
 """1D Z2 lattice gauge theory Hamiltonian."""
 from typing import Optional
 import numpy as np
-from qiskit.quantum_info import SparsePauliOp
+from .pauli import pauli_positions
 
 
 def hamiltonian(
@@ -9,7 +9,7 @@ def hamiltonian(
     mass: float,
     coupling: float,
     boundary_condition='open'
-) -> SparsePauliOp:
+) -> tuple[list[str], list[float]]:
     """Z2 lattice gauge theory Hamiltonian with unit-normalized field term.
 
     H = sum_{i in links} X_i + mass * sum_{i in sites} (-1)^i Z_i
@@ -45,11 +45,11 @@ def hamiltonian(
         paulis += ['ZY' + 'I' * (num_qubits - 3) + 'Y']
     coeffs += [coupling / 2.] * (num_links * 2)
 
-    return SparsePauliOp(paulis, coeffs)
+    return paulis, coeffs
 
 
 def domain_of(
-    hterm: SparsePauliOp,
+    pauli: str,
     domain_sizes: Optional[dict[int | str, int]] = None,
     flank_size: int = 1
 ) -> tuple[int, ...]:
@@ -63,23 +63,23 @@ def domain_of(
     Returns:
         A tuple of qubit indices that specify the QITE domain of the Hamiltonian term.
     """
-    pstr_full = hterm.paulis[0].to_label()
     # Counting qubits from the right
-    pauli_positions = [iq for iq, p in enumerate(pstr_full[::-1]) if p != 'I']
+    positions = pauli_positions(pauli)
     # For now we limit to contiguous Paulis
-    if not np.all(np.abs(np.diff(pauli_positions)) == 1):
+    if not np.all(np.abs(np.diff(positions)) == 1):
         raise ValueError('Non-contiguous Pauli op passed')
 
-    pstr = ''.join(pstr_full[::-1][pos] for pos in pauli_positions[::-1])
+    pstr = ''.join(pauli[::-1][pos] for pos in positions)
+    domain_sizes = domain_sizes or {}
     try:
         dom_size = domain_sizes[pstr]
     except KeyError:
         try:
             dom_size = domain_sizes[len(pstr)]
         except KeyError:
-            dom_size = (max(pauli_positions) + flank_size) - (min(pauli_positions) - flank_size) + 1
+            dom_size = (max(positions) + flank_size) - (min(positions) - flank_size) + 1
     flank_size = (dom_size - len(pstr)) // 2
-    low = max(min(pauli_positions) - flank_size, 0)
-    high = min(low + dom_size, hterm.num_qubits)
+    low = max(min(positions) - flank_size, 0)
+    high = min(low + dom_size, len(pauli))
     low = min(high - dom_size, low)
     return tuple(range(low, high))[::-1]

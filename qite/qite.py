@@ -7,11 +7,11 @@ import numpy as np
 from scipy.sparse.linalg import minres
 import jax
 import jax.numpy as jnp
+from .pauli import (PAULI, MAX_WEIGHT_CACHED, assert_pauli_matrices, fill_pauli_globals,
+                    generate_pauli_prod_table, ravel_pauli_index, pauli_positions,
+                    make_pauli_matrix, make_pauli_matrix_from_idx)
 
-PAULI = {}
-MAX_WEIGHT_CACHED = 7
 TROTTERIZE_AMAT = True
-
 LOG = logging.getLogger(__name__)
 
 
@@ -41,7 +41,8 @@ def qite(
         hterms = []
         for pauli, coeff, positions in zip(paulis, coeffs, positions_list):
             ops = [pauli[::-1][pos].upper() for pos in positions]
-            pmat = make_pauli_matrix(ops)
+            indices = jnp.array([PAULI['idx'][op] for op in ops])
+            pmat = make_pauli_matrix(indices)
             hterms.append((pmat * coeff, positions))
     else:
         hterms = (paulis, coeffs)
@@ -118,104 +119,17 @@ def qite_step(
         if dom_size <= MAX_WEIGHT_CACHED:
             a_matrix = jnp.sum(a_vec[:, None, None] * PAULI['matrices'][dom_size], axis=0)
         else:
+            def matrix_cumsum(ipauli, mat):
+                return mat + a_vec[ipauli] * make_pauli_matrix_from_idx(ipauli, dom_size)
+
             a_matrix = jax.lax.fori_loop(
                 0, 4 ** dom_size,
-                lambda ipauli, mat: mat + a_vec[ipauli] * make_pauli_matrix(ipauli, dom_size),
+                matrix_cumsum,
                 jnp.zeros((2 ** dom_size,) * 2, dtype=np.complex128)
             )
         state = update_state(a_matrix, state, domain, delta_beta)
 
     return state
-
-
-def fill_pauli_globals():
-    """Helper function to avoid creating JAX arrays at the module level."""
-    PAULI['idx'] = {'I': 0, 'X': 1, 'Y': 2, 'Z': 3}
-    PAULI['basis'] = jnp.array([
-        [[1., 0.], [0., 1.]],
-        [[0., 1.], [1., 0.]],
-        [[0., -1.j], [1.j, 0.]],
-        [[1., 0.], [0., -1.]]
-    ])
-    PAULI['prod_idx'] = jnp.array([
-        [0, 1, 2, 3],
-        [1, 0, 3, 2],
-        [2, 3, 0, 1],
-        [3, 2, 1, 0]
-    ])
-    PAULI['prod_coeff'] = jnp.array([
-        [1., 1., 1., 1.],
-        [1., 1., 1.j, -1.j],
-        [1., -1.j, 1., 1.j],
-        [1., 1.j, -1.j, 1.]
-    ])
-    PAULI['prod_table'] = {}
-    PAULI['matrices'] = {}
-
-
-@partial(jax.jit, static_argnums=[1])
-def unravel_pauli_indices(index: int | np.ndarray, num_qubits: int) -> np.ndarray:
-    return (jnp.asarray(index)[..., None] // (4 ** jnp.arange(num_qubits)[::-1])) % 4
-
-
-@jax.jit
-def ravel_pauli_index(indices: np.ndarray) -> np.ndarray:
-    return jnp.sum(indices * (4 ** jnp.arange(indices.shape[-1])[::-1]), axis=-1)
-
-
-def pauli_positions(pauli: str):
-    """Return the positions of non-identity Paulis, counting qubits from the right end."""
-    return tuple(iq for iq, p in enumerate(pauli[::-1]) if p != 'I')[::-1]
-
-
-@partial(jax.jit, static_argnums=[1])
-def make_pauli_matrix(
-    indices: int | np.ndarray | str,
-    num_qubits: int = None
-) -> np.ndarray:
-    if isinstance(indices, int):
-        indices = unravel_pauli_indices(indices, num_qubits)
-    elif isinstance(indices, str):
-        indices = np.ndarray([PAULI['idx'][op] for op in indices])
-
-    num_qubits = len(indices)
-
-    args = []
-    for ip, idx in enumerate(indices):
-        args += [PAULI['basis'][idx], [2 * ip, 2 * ip + 1]]
-    args.append(list(range(0, 2 * num_qubits, 2)) + list(range(1, 2 * num_qubits + 1, 2)))
-    return jnp.einsum(*args).reshape((2 ** num_qubits,) * 2)
-
-
-vmake_pauli_matrix = jax.jit(jax.vmap(make_pauli_matrix, (0, None)), static_argnums=[1])
-
-
-def assert_pauli_matrices(dom_size):
-    """Expand and cache the full Pauli matrices for small domain sizes."""
-    if dom_size <= MAX_WEIGHT_CACHED and dom_size not in PAULI['matrices']:
-        PAULI['matrices'][dom_size] = vmake_pauli_matrix(jnp.arange(4 ** dom_size), dom_size)
-
-
-@partial(jax.jit, static_argnums=[2])
-def lookup_pauli_prod(idx1: int, idx2: int, num_qubits: int) -> tuple[int, complex]:
-    """Compute the Pauli string corresponding to the product of two strings."""
-    idx1 = unravel_pauli_indices(idx1, num_qubits)
-    idx2 = unravel_pauli_indices(idx2, num_qubits)
-    index = ravel_pauli_index(PAULI['prod_idx'][idx1, idx2])
-    coeff = np.prod(PAULI['prod_coeff'][idx1, idx2])
-    return index, coeff
-
-
-_pauli_prod_table = jax.vmap(jax.vmap(lookup_pauli_prod, (None, 0, None)), (0, None, None))
-_pauli_prod_table = jax.jit(_pauli_prod_table, static_argnums=[2])
-
-
-def generate_pauli_prod_table(num_qubits: int) -> tuple[np.ndarray, np.ndarray]:
-    """Generate a matrix of Pauli product operators and coefficients."""
-    if num_qubits not in PAULI['prod_table']:
-        indices = jnp.arange(4 ** num_qubits)
-        PAULI['prod_table'][num_qubits] = _pauli_prod_table(indices, indices, num_qubits)
-    return PAULI['prod_table'][num_qubits]
 
 
 @partial(jax.jit, static_argnums=[1])
@@ -236,12 +150,12 @@ vapply_on_domain = jax.jit(jax.vmap(apply_on_domain, (0, None, None)), static_ar
 
 @partial(jax.jit, static_argnums=[1])
 def compute_sigma_psi(
-    idx: np.ndarray,
+    idx: int,
     domain: tuple[int, ...],
     state: np.ndarray
 ) -> np.ndarray:
     """Compute σ_I|ψ>."""
-    return apply_on_domain(make_pauli_matrix(idx, len(domain)), domain, state)
+    return apply_on_domain(make_pauli_matrix_from_idx(idx, len(domain)), domain, state)
 
 
 vcompute_sigma_psi = jax.jit(jax.vmap(compute_sigma_psi, in_axes=(0, None, None)),
@@ -256,11 +170,12 @@ def apply_hterm(
     if isinstance(hterm[0], str):
         positions = pauli_positions(hterm[0])
         pauli = ''.join(hterm[0][::-1][pos] for pos in positions)
+        indices = np.array([PAULI['idx'][p] for p in pauli])
         if (weight := len(pauli)) <= MAX_WEIGHT_CACHED:
-            index = ravel_pauli_index(np.array([PAULI['idx'][p] for p in pauli]))
+            index = ravel_pauli_index(indices)
             matrix = PAULI['matrices'][weight][index]
         else:
-            matrix = make_pauli_matrix(pauli)
+            matrix = make_pauli_matrix(indices)
         matrix *= hterm[1]
     else:
         matrix, positions = hterm
@@ -311,7 +226,7 @@ def update_state_by_pauli(
     if len(domain) <= MAX_WEIGHT_CACHED:
         pop = PAULI['matrices'][len(domain)][ipauli]
     else:
-        pop = make_pauli_matrix(ipauli, len(domain))
+        pop = make_pauli_matrix_from_idx(ipauli, len(domain))
     state = (jnp.cos(delta_t * coeff) * state
              + apply_on_domain(-1.j * jnp.sin(delta_t * coeff) * pop, domain, state))
     return state
