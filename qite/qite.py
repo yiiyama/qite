@@ -64,8 +64,7 @@ def qite(
 
     if return_energies:
         return state, energies
-    else:
-        return state
+    return state
 
 
 def qite_step(
@@ -79,6 +78,13 @@ def qite_step(
     if not PAULI:
         fill_pauli_globals()
 
+    # Make sure Pauli matrices are generated for this weight (if small)
+    if isinstance(hterm[0], str):
+        weight = len(pauli_positions(hterm[0]))
+    else:
+        weight = hterm[1]
+    assert_pauli_matrices(weight)
+
     dom_size = len(domain)
     assert_pauli_matrices(dom_size)
     # Sort domain to descending order
@@ -86,9 +92,9 @@ def qite_step(
 
     # <ψ|σ_I
     if dom_size <= MAX_WEIGHT_CACHED:
-        sigma_psi_dag_arr = vapply_on_domain(PAULI['matrices'][dom_size], domain, state)
+        sigma_psi_dag_arr = vapply_on_domain(PAULI['matrices'][dom_size], domain, state).conjugate()
     else:
-        sigma_psi_dag_arr = vcompute_sigma_psi(jnp.arange(4 ** dom_size), domain, state)
+        sigma_psi_dag_arr = vcompute_sigma_psi(jnp.arange(4 ** dom_size), domain, state).conjugate()
 
     # h|ψ>
     h_psi = apply_hterm(hterm, state)
@@ -227,6 +233,5 @@ def update_state_by_pauli(
         pop = PAULI['matrices'][len(domain)][ipauli]
     else:
         pop = make_pauli_matrix_from_idx(ipauli, len(domain))
-    state = (jnp.cos(delta_t * coeff) * state
-             + apply_on_domain(-1.j * jnp.sin(delta_t * coeff) * pop, domain, state))
-    return state
+    return (jnp.cos(delta_t * coeff) * state
+            + apply_on_domain(-1.j * jnp.sin(delta_t * coeff) * pop, domain, state))
